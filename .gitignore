@@ -1,0 +1,8 @@
+# never commit the supplied data or keys
+snapshots/
+snapshots_zip/
+*.zip
+results/
+.env
+__pycache__/
+*.pyc
