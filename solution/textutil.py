@@ -26,6 +26,8 @@ general highest lowest best top maximum minimum max min between option options f
 recognition received get getting see find standard regular typical normal
 ongoing usual going new keep same over under finance financing borrow would use using mid early late
 january february march april may june july august september october november december
+charging charge charges day days these those pay paying pays earn earning earns list lists show shows
+webpage page tell please
 """.split())
 
 SYN = {
@@ -40,16 +42,31 @@ SYN = {
     "dividends": "dividend", "fees": "fee", "charges": "fee", "charge": "fee",
     "conventional": "mortgage",
     "illinois": "il", "iowa": "ia", "wisconsin": "wi",
+    "ten": "10", "fifteen": "15", "twenty": "20", "thirty": "30", "forty": "40", "sixty": "60",
+    "seventeen": "17", "thirtysix": "36", "fortyeight": "48", "seventytwo": "72", "eightyfour": "84",
+    "membership": "join", "signup": "join", "enroll": "join",
+    "drivethru": "drive", "drivethrough": "drive", "thru": "drive",
 }
+
+
+SUFFIXES = ("ations", "ation", "itions", "ition", "izing", "ized", "izes", "ize", "ing", "ed")
 
 
 def stem(w: str) -> str:
     w = SYN.get(w, w)
+    if len(w) > 6 and not w[0].isdigit():
+        for suf in SUFFIXES:
+            if w.endswith(suf) and len(w) - len(suf) >= 4:
+                w = w[: -len(suf)]
+                break
     if len(w) > 4 and w.endswith("ies"):
         w = w[:-3] + "y"
     elif len(w) > 3 and w.endswith("s") and not w.endswith("ss") and not w.isdigit():
         w = w[:-1]
     return SYN.get(w, w)
+
+
+GENERIC = GENERIC | {stem(w) for w in GENERIC}
 
 
 def tokens(text: str) -> list[str]:

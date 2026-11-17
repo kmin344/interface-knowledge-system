@@ -17,7 +17,7 @@ try:  # the harness puts its own folder on sys.path; use its types when availabl
 except Exception:  # standalone use: identical local copies
     from kb_types import Answer, Conflict, Snapshot, Source  # type: ignore
 
-from answerer import (PCT_RE, REFUSAL_TEXT, coverage, is_rate_chunk, rank, specific_terms,  # noqa: E402
+from answerer import (ADDR_RE, PHONE_RE, TIME_RE, PCT_RE, REFUSAL_TEXT, coverage, is_rate_chunk, rank, specific_terms,  # noqa: E402
                       missing_name, time_signature, asked_terms, has_terms, strip_dates)
 from conflicts import find_conflicts  # noqa: E402
 from store import History, authority  # noqa: E402
@@ -74,6 +74,12 @@ class TemporalKnowledge:
         spec = specific_terms(qt)
 
         picked = [bi]
+        if it.listing and best.kind == "row":
+            # a list question answered by one row: show the row's whole table instead
+            for j, c in enumerate(view.chunks):
+                if c.kind == "table" and c.url == best.url and c.table_id == best.table_id and len(c.text) < 1500:
+                    picked = [j]
+                    break
         if it.listing and best.kind in ("table", "row"):
             # "what cards do you offer": the best table from each authoritative page
             seen_tables = {(best.url, best.table_id)}
@@ -106,11 +112,14 @@ class TemporalKnowledge:
                     break
                 if c.kind == "row" and c.url == best.url and c.table_id == best.table_id:
                     picked.append(i)
-        elif best.kind == "para" and not it.url and len(best.text) < 350 and any(
-                view.chunks[i].url == best.url and view.chunks[i].kind == "para" and s >= 0.7 * best_s
+        elif best.kind == "para" and not it.url and any(
+                view.chunks[i].url == best.url and view.chunks[i].kind == "para"
+                and s >= (0.7 if len(best.text) < 350 else 0.85) * best_s
                 for s, i in ranked[1:4]):
+            # the next passage of the same article often carries the rest of the answer
             picked.append(next(i for s, i in ranked[1:4] if view.chunks[i].url == best.url
-                               and view.chunks[i].kind == "para" and s >= 0.7 * best_s))
+                               and view.chunks[i].kind == "para"
+                               and s >= (0.7 if len(best.text) < 350 else 0.85) * best_s))
         elif len(best.text) < 120 and not it.url:
             # a short line ("Tap to Pay: add your card...") rarely says everything; add the next
             # good passage from a trusted page
@@ -125,7 +134,7 @@ class TemporalKnowledge:
             c = view.chunks[i]
             t = c.text
             if c.kind == "para" and len(t) > 350:
-                t = pick_sentences(t, spec, it)
+                t = pick_sentences(t, spec, it, qt)
             parts.append(t)
         text = " | ".join(parts)
         if best.heading and best.kind == "para":
@@ -135,6 +144,12 @@ class TemporalKnowledge:
         if it.url:
             text = self._with_links(view, bi, spec, text)
         sources = self._sources(view, ranked, picked, text)
+        if it.hours or it.address:
+            # branch facts: also point to the site's own branch locator page
+            for url, rec in view.pages.items():
+                if rec.present and re.sub(r"^https?://[^/]+", "", url).rstrip("/") in it.homes \
+                        and all(s.url != url for s in sources) and len(sources) < 4:
+                    sources.append(Source(url=url, snapshot_id=rec.snapshot_id))
         return Answer(text=text[:1500], sources=sources, confident=True)
 
     def _with_links(self, view, bi, spec, text):
@@ -148,7 +163,10 @@ class TemporalKnowledge:
                 if not l.startswith("http") or l in links:
                     continue
                 lt = set(tokens(l.replace(".", " ").replace("/", " ")))
-                if set(spec) & lt and authority(l) >= 0.8:
+                host = re.sub(r"^https?://", "", l).split("/")[0]
+                page_host = re.sub(r"^https?://", "", best.url).split("/")[0].removeprefix("www.")
+                sister = host != page_host and host.endswith("." + page_host) and authority(l) >= 0.8
+                if (set(spec) & lt and authority(l) >= 0.8) or sister:
                     links.append(l)
         url = best.url.split("#")[0]
         return f"{text} Link: {url}" + "".join(f" , {l}" for l in links[:2])
@@ -173,23 +191,30 @@ class TemporalKnowledge:
         return out
 
 
+DATE_IN_TEXT_RE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? 20\d\d\b")
 SENT_RE = re.compile(r"(?<![ap]\.m\.)(?<=[.!?])\s+(?=[A-Z0-9“\"])")
 
 
-def pick_sentences(text: str, spec: list[str], it) -> str:
+def pick_sentences(text: str, spec: list[str], it, qt_all=None) -> str:
     """Keep the one or two sentences of a long paragraph that carry the answer."""
     sents = SENT_RE.split(text)
     if len(sents) <= 2:
         return text
     want = set(spec)
+    allq = set(qt_all or [])
     scored = []
     for k, snt in enumerate(sents):
         st = set(tokens(snt))
-        sc = len(want & st)
+        sc = len(want & st) + 0.25 * len((allq - want) & st)
         if re.search(r"\$\d|\b\d", snt):
             sc += 0.5 if (it.count or it.rate) else 0.3
         if it.rate and PCT_RE.search(snt):
             sc += 0.5
+        if (it.phone and PHONE_RE.search(snt)) or (it.hours and TIME_RE.search(snt)) \
+                or (it.address and ADDR_RE.search(snt)):
+            sc += 1.0
+        if it.when and DATE_IN_TEXT_RE.search(snt):
+            sc += 1.0
         if snt.lstrip().startswith(("“", '"')):
             sc -= 0.5
         scored.append((sc, -k, k))

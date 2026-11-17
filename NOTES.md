@@ -12,11 +12,13 @@ snapshots takes about 6 seconds; answers take 0.2–0.8 s (p95 well under the 2 
 | Run | Score |
 |---|---|
 | `starter` (official scorer, public 40) | 0.093 |
-| this solution (official scorer, public 40) | **0.851** accuracy, consistency 1.0, speed 1.0, 0 stale-trap hits |
+| this solution (official scorer, public 40) | **0.861** accuracy, consistency 1.0, speed 1.0 (p95 ≈ 0.8 s), 0 stale-trap hits |
 | `harness/selftest` (with conflicts gold) | conflicts F1 1.0, resolution 1.0 |
 
-I also wrote 45 extra questions of my own (rewordings, new tiers, `as_of` dates, things that are
-not on the site) to check that the rules generalise rather than fit the public 40. They live
+Because the hidden set rewords questions, most of the tuning was done against questions I wrote
+myself and scored with the official scorer: a second phrasing of each of the 40 public questions
+(0.74 → **0.93**), 30 more rewordings of the same facts (**0.97**), and 30 casual / new-tier /
+`as_of` / not-on-the-site questions (**0.80**). Zero stale-trap hits on all of them. They live
 outside this repo because they quote the data.
 
 ## How it works
@@ -46,6 +48,8 @@ addresses) that the crawler split with blank lines are merged back together.
 | Tier fit | Model year 2025 falls in "2024-27", not "2021-22"; $15,000 falls in "$10,000 – $24,999.99"; a "Rewards Visa" question is not about the "Business Rewards Visa". |
 | Coverage | How many of the question's specific words the passage itself contains, weighted by rarity. |
 | Consensus | For hours, phone numbers and counts, the value the site repeats on many pages beats a one-off. |
+| Re-publication | When a press release exists as `story`, `story-2`, `story-3`, the newest printed date wins. |
+| Names and negation | A passage that lacks a name the question uses ("Mullan Avenue") is demoted; "(not jumbo)" rules jumbo rows out. |
 
 **Answering.** The answer is the passage itself, never a paraphrase, so every number in it is on
 the cited page. Tier questions bring along sibling rows from the same table; "what cards do you
@@ -71,7 +75,8 @@ figures are cited too.
    the tiers side by side. *(17-month special 4.10% vs jumbo 4.20%; Share Savings by balance)*
 6. When the site repeats a fact about itself on many pages, the majority wins over one-offs.
    *(branch count; general lobby hours; the main phone number)*
-7. Recognitions accumulate: "fifth time" supersedes "fourth time".
+7. Recognitions accumulate: "fifth time" supersedes "fourth time", and the newest re-publication
+   of a story supersedes older ones.
 8. If the site doesn't say, say so. *(7/1 ARM, construction-loan rate, Mullan Avenue branch)*
 
 ## conflicts()
@@ -92,8 +97,11 @@ Three narrow detectors, because every false entry costs precision:
 - Topic-home hints (`TOPIC_HOME` in `answerer.py`) and the authority map are specific to how this
   credit union's site is organised. They are a few lines each and are the first thing to revisit
   for another site.
-- A paraphrase that uses a word the site never uses ("CD" works, rarer slang may not) falls back
-  to plain BM25.
+- A paraphrase that uses a word the site never uses ("CD", "drive-thru", "thirty-year" work;
+  rarer slang may not) falls back to plain BM25.
+- Public misses I know about: the Forbes question picks the right (newest) article but not the
+  sentence with "fifth"; "who can join" misses the line naming the three states; the
+  Volunteer-Time-Off count prefers the 2024 article over the 2023 one the eval expects.
 
 ## Layout
 

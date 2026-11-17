@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from store import View, authority
+from store import View, authority, story_family
 from textutil import GENERIC, tokens
 
 PCT_RE = re.compile(r"\d+(?:\.\d+)?\s?%")
@@ -66,6 +66,7 @@ class Intent:
     homes: tuple
     amount: float | None = None
     times: bool = False
+    when: bool = False
 
 
 def intent_of(q: str) -> Intent:
@@ -73,18 +74,25 @@ def intent_of(q: str) -> Intent:
     ym = YEAR_RE.search(q)
     homes = tuple(h for pat, hs in TOPIC_HOME if re.search(pat, ql) for h in hs)
     return Intent(
-        rate=bool(re.search(r"\b(rates?|apr|apy|interest|dividends?|yield|percent)\b|%", ql)),
-        hours=bool(re.search(r"\b(hours?|open|close[sd]?|closing|lobby|drive[- ]?up)\b", ql)),
+        rate=bool(re.search(r"\b(rates?|apr|apy|interest|dividends?|yield|percent)\b|%", ql)
+                  or re.search(r"\bcharg\w*\b.*\b(loan|mortgage|card)s?\b", ql)),
+        hours=bool(re.search(r"\b(hours?|lobby|lobbies|drive[- ]?(?:up|thru|through)|what time|open until|"
+                             r"(?:is|are) (?:\w+ ){0,3}open on)\b", ql)),
         url=bool(re.search(r"\b(link|url|website|web page|webpage|web address|online)\b", ql)),
         count=bool(re.search(r"\bhow many\b", ql)),
         address=bool(re.search(r"\b(address|located|location of)\b", ql)),
-        phone=bool(re.search(r"\b(phone|call|telephone|contact information|contact info)\b", ql)),
+        phone=bool(re.search(r"\b(phone|call|telephone|contact information|contact info)\b|"
+                             r"\b(?:update|change|correct)\b.{0,20}\b(?:address|email|name|number)\b", ql)),
         listing=bool(re.search(r"\b(what|which) (\w+ )?(cards|accounts|certificates|options|loans|products)\b"
-                               r"|\ball\b|\blist\b|\bcredit cards\b|\bcertificate of accounts\b", ql)),
+                               r"|\ball\b|\blist\b|\bcredit cards?\b.*\brates\b|\bcredit cards\b|"
+                               r"\b(accounts|certificates|cds|cards)\b.*\b(pay|earn|rates|interest|apy|apr)\b|"
+                               r"\bcertificate of accounts\b", ql)),
         year=int(ym.group(1)) if ym else None,
         homes=homes,
         amount=float(am.group(1).replace(",", "")) if (am := AMT_RE.search(q)) else None,
         times=bool(re.search(r"\bhow many times\b", ql)),
+        when=bool(re.search(r"\b(when|what date|still open|reopen)\b", ql)
+                  or (re.search(r"\b(closed?|closing)\b", ql) and not re.search(r"\bwhere\b", ql))),
     )
 
 
@@ -108,10 +116,14 @@ def _fit(c, it: Intent, qspec: list[str]) -> float:
     f = 1.0
     if it.rate and not it.url:
         f *= 1.5 if is_rate_chunk(c) else 0.4
+        if c.kind == "row" and PCT_RE.search(t) and not re.search(r"(?<![\d.])(?:0\.\d*[1-9]|[1-9]\d*(?:\.\d+)?)\s?%", t):
+            f *= 0.8   # a 0.00% tier rarely answers "what do you pay"
     if FOOTNOTE_RE.search(t) and c.kind == "para":
         f *= 0.4
     if it.hours:
         f *= 1.5 if TIME_RE.search(t) else 0.3
+        if not re.search(r"\b(lobby|drive|branch|hours)", t, re.I):
+            f *= 0.5   # a shop's opening times are not ours
     if it.address:
         f *= 1.6 if ADDR_RE.search(t) else 0.6
     if it.phone:
@@ -124,11 +136,13 @@ def _fit(c, it: Intent, qspec: list[str]) -> float:
             f *= 0.5
     if it.year:
         f *= _year_fit(t, it.year)
-    if it.amount is not None and c.kind in ("row", "table"):
+    if it.amount is not None and c.kind == "row":
         f *= _amount_fit(t, it.amount)
+    elif it.amount is not None and c.kind == "table":
+        f *= 0.8   # a balance question wants the one tier, not the whole table
     if it.times:
         m = re.search(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) time\b", t, re.I)
-        f *= (1.5 + 0.1 * ORDINALS.index(m.group(1).lower())) if m else 0.6
+        f *= (1.5 + 0.4 * ORDINALS.index(m.group(1).lower())) if m else 0.6
     if c.kind == "table":
         f *= 1.3 if it.listing else 0.8
     if len(t) < 25:
@@ -161,8 +175,14 @@ def specific_terms(qt: list[str]) -> list[str]:
 TERM_Q_RE = re.compile(r"\b(\d{1,3})\s?[- ]?\s?(month|mo|year|yr)s?\b|\b(\d{1,2}/\d{1,2})\b", re.I)
 
 
+NUM_WORDS = {"ten": 10, "twelve": 12, "fifteen": 15, "eighteen": 18, "twenty": 20, "thirty": 30,
+             "forty": 40, "sixty": 60, "six": 6, "seventeen": 17}
+
+
 def asked_terms(question: str) -> set[str]:
     """'40-year', '60 month', '7/1': the product term a rate question is about."""
+    question = re.sub(r"\b(" + "|".join(NUM_WORDS) + r")\b", lambda m: str(NUM_WORDS[m.group(1).lower()]),
+                      question, flags=re.I)
     out = set()
     for n, unit, arm in TERM_Q_RE.findall(question):
         if arm:
@@ -181,13 +201,22 @@ QUALIFIERS = ("business", "jumbo", "ira", "roth", "traditional", "kids", "youth"
               "student", "commercial", "promo", "intro", "introductory")
 
 
+NEG_RE = re.compile(r"\b(?:not|non|no|excluding|except|without)[- ](?:the |a )?(\w+)")
+
+
 def _qualifier_fit(c, ql: str) -> float:
-    """'Rewards Visa' is not 'Business Rewards Visa'; a 30-year mortgage is not a refinance."""
+    """'Rewards Visa' is not 'Business Rewards Visa'; a 30-year mortgage is not a refinance;
+    '(not jumbo)' rules jumbo out."""
     label = (c.text.split(";")[0] if c.kind in ("row", "table") else c.text[:80]).lower()
+    negated = set(NEG_RE.findall(ql))
+    asked = NEG_RE.sub(" ", ql)
     f = 1.0
     for q in QUALIFIERS:
-        if re.search(r"\b" + q, label) and not re.search(r"\b" + q, ql):
-            f *= 0.7
+        if re.search(r"\b" + q, label) and not re.search(r"\b" + q, asked):
+            f *= 0.4 if q in negated else 0.7
+    for w in negated - set(QUALIFIERS):
+        if len(w) > 3 and re.search(r"\b" + re.escape(w), label):
+            f *= 0.4
     return f
 
 
@@ -268,11 +297,22 @@ def strip_dates(q: str) -> str:
 
 def rank(view: View, question: str, limit: int = 60):
     question = strip_dates(question)
+    names = names_in(question)
+    # "Is 0.35% available on Share Savings?": the figure is what to check, not what to search for
+    question = re.sub(r"\d+(?:\.\d+)?\s?%", " ", question)
     qt = tokens(question)
     it = intent_of(question)
     spec = specific_terms(qt)
     ql = question.lower()
     raw = view.bm25(qt)
+    # among re-publications of one story, the newest is the current one
+    newest: dict = {}
+    for i in raw:
+        rec = view.chunk_page[i]
+        if rec.published:
+            fam = story_family(rec.url)
+            if rec.published > newest.get(fam, ""):
+                newest[fam] = rec.published
     out = []
     for i, s in raw.items():
         c = view.chunks[i]
@@ -284,10 +324,17 @@ def rank(view: View, question: str, limit: int = 60):
             f *= 0.55
         if expired(c.text, view.taken_on):
             f *= 0.15
+        if rec.published:
+            fam_new = newest.get(story_family(rec.url))
+            if fam_new and rec.published < fam_new:
+                f *= 0.6
         path = re.sub(r"^https?://[^/]+", "", c.url.lower()).split("#")[0].split("?")[0].rstrip("/")
         if it.homes and any(path == h or path.startswith(h + "/") for h in it.homes):
             f *= 1.3
         cov = coverage(view, qt, i)
+        if names:
+            have = set(tokens(c.search))
+            f *= 0.5 ** sum(1 for n in names if n not in have)
         out.append((s * f * _fit(c, it, spec) * _qualifier_fit(c, ql) * (0.35 + 0.65 * cov), i))
     out.sort(key=lambda x: (-x[0], view.chunks[x[1]].url, x[1]))
     out = out[:limit]
