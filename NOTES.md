@@ -12,12 +12,12 @@ snapshots takes about 6 seconds; answers take 0.2–0.8 s (p95 well under the 2 
 | Run | Score |
 |---|---|
 | `starter` (official scorer, public 40) | 0.093 |
-| this solution (official scorer, public 40) | **0.861** accuracy, consistency 1.0, speed 1.0 (p95 ≈ 0.8 s), 0 stale-trap hits |
+| this solution (official scorer, public 40) | **0.915** accuracy, consistency 1.0, speed 1.0 (p95 ≈ 0.8 s), 0 stale-trap hits |
 | `harness/selftest` (with conflicts gold) | conflicts F1 1.0, resolution 1.0 |
 
 Because the hidden set rewords questions, most of the tuning was done against questions I wrote
 myself and scored with the official scorer: a second phrasing of each of the 40 public questions
-(0.74 → **0.93**), 30 more rewordings of the same facts (**0.97**), and 30 casual / new-tier /
+(0.74 → **0.95**), 30 more rewordings of the same facts (**0.97**), and 30 casual / new-tier /
 `as_of` / not-on-the-site questions (**0.80**). Zero stale-trap hits on all of them. They live
 outside this repo because they quote the data.
 
@@ -50,6 +50,8 @@ addresses) that the crawler split with blank lines are merged back together.
 | Consensus | For hours, phone numbers and counts, the value the site repeats on many pages beats a one-off. |
 | Re-publication | When a press release exists as `story`, `story-2`, `story-3`, the newest printed date wins. |
 | Names and negation | A passage that lacks a name the question uses ("Mullan Avenue") is demoted; "(not jumbo)" rules jumbo rows out. |
+| Subject | A sentence where the question's name and the site's own name meet ("Forbes … named Dupaco") beats one about the name alone ("Forbes recognized 207 credit unions"). Award questions prefer the highest "Nth time". |
+| Eligibility | "Who can join" prefers the section the site titles "eligible to join", and adds the one line that lists where it operates ("in Iowa, Illinois and Wisconsin"), which shares no words with the question. |
 
 **Answering.** The answer is the passage itself, never a paraphrase, so every number in it is on
 the cited page. Tier questions bring along sibling rows from the same table; "what cards do you
@@ -99,9 +101,10 @@ Three narrow detectors, because every false entry costs precision:
   for another site.
 - A paraphrase that uses a word the site never uses ("CD", "drive-thru", "thirty-year" work;
   rarer slang may not) falls back to plain BM25.
-- Public misses I know about: the Forbes question picks the right (newest) article but not the
-  sentence with "fifth"; "who can join" misses the line naming the three states; the
-  Volunteer-Time-Off count prefers the 2024 article over the 2023 one the eval expects.
+- Public misses I know about: the Volunteer-Time-Off count prefers the 2024 article over the 2023
+  one the eval expects ("last year" is ambiguous, and newest-wins is the rule elsewhere);
+  "do any tiers pay 0.35%?" needs a yes/no judgement an extractive answer cannot make; dup-005
+  has no expected values, so the scorer gives it 0 whatever the answer.
 
 ## Layout
 

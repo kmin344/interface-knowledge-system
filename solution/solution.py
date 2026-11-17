@@ -129,6 +129,14 @@ class TemporalKnowledge:
                     picked.append(i)
                     break
 
+        if it.eligibility:
+            # "who can join": the site states *where* in one short line that shares no words with
+            # the question ("You can find us in Iowa, Illinois and Wisconsin")
+            rec = view.chunk_page[bi]
+            for j, c in enumerate(view.chunks):
+                if c.url == best.url and c.kind == "para" and j not in picked and REGION_RE.search(c.text):
+                    picked.append(j)
+                    break
         parts = []
         for i in picked:
             c = view.chunks[i]
@@ -191,6 +199,9 @@ class TemporalKnowledge:
         return out
 
 
+_PLACE = r"[A-Z][a-z]+(?:\s[A-Z][a-z]+)*"
+# a list of three or more places: "in Iowa, Illinois and Wisconsin" (not "in Shine Online and Mobile Banking")
+REGION_RE = re.compile(r"\b(?:in|across|throughout)\s+" + _PLACE + r"(?:,\s*" + _PLACE + r")+,?\s+and\s+" + _PLACE)
 DATE_IN_TEXT_RE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? 20\d\d\b")
 SENT_RE = re.compile(r"(?<![ap]\.m\.)(?<=[.!?])\s+(?=[A-Z0-9“\"])")
 

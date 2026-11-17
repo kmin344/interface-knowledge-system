@@ -67,6 +67,8 @@ class Intent:
     amount: float | None = None
     times: bool = False
     when: bool = False
+    award: bool = False
+    eligibility: bool = False
 
 
 def intent_of(q: str) -> Intent:
@@ -91,6 +93,9 @@ def intent_of(q: str) -> Intent:
         homes=homes,
         amount=float(am.group(1).replace(",", "")) if (am := AMT_RE.search(q)) else None,
         times=bool(re.search(r"\bhow many times\b", ql)),
+        award=bool(re.search(r"\b(recogni\w*|awards?|honou?r\w*|ranked|rankings?|accolades?)\b", ql)),
+        eligibility=bool(re.search(r"\b(eligib\w*|who can (join|become)|qualif\w* (to|for) (join|membership)|"
+                                   r"can i (join|become a member))\b", ql)),
         when=bool(re.search(r"\b(when|what date|still open|reopen)\b", ql)
                   or (re.search(r"\b(closed?|closing)\b", ql) and not re.search(r"\bwhere\b", ql))),
     )
@@ -140,6 +145,14 @@ def _fit(c, it: Intent, qspec: list[str]) -> float:
         f *= _amount_fit(t, it.amount)
     elif it.amount is not None and c.kind == "table":
         f *= 0.8   # a balance question wants the one tier, not the whole table
+    if it.award and c.kind == "para":
+        # an award question wants the sentence that says what the subject received
+        m = re.search(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) time\b", t, re.I)
+        if m:
+            # recognitions accumulate: the highest count is the current one
+            f *= 1.3 + 0.3 * ORDINALS.index(m.group(1).lower())
+        elif re.search(r"\b(named|ranked|awarded|honored|selected as|recognized as)\b", t, re.I):
+            f *= 1.15
     if it.times:
         m = re.search(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) time\b", t, re.I)
         f *= (1.5 + 0.4 * ORDINALS.index(m.group(1).lower())) if m else 0.6
@@ -305,6 +318,7 @@ def rank(view: View, question: str, limit: int = 60):
     spec = specific_terms(qt)
     ql = question.lower()
     raw = view.bm25(qt)
+    brand = site_brand(view)
     # among re-publications of one story, the newest is the current one
     newest: dict = {}
     for i in raw:
@@ -335,6 +349,13 @@ def rank(view: View, question: str, limit: int = 60):
         if names:
             have = set(tokens(c.search))
             f *= 0.5 ** sum(1 for n in names if n not in have)
+            if c.kind == "para" and brand and _cooccur(c.text, brand, names):
+                f *= 1.3   # "Forbes ... named Dupaco" beats "Forbes recognized 207 credit unions"
+        if it.eligibility and re.match(r"^/about/join\b", path):
+            f *= 1.25
+        if it.eligibility and re.search(r"eligib|who can|join if|membership requirement",
+                                        c.heading.split(" > ")[-1], re.I):
+            f *= 1.5   # the section the site titles "You're eligible to join if…"
         out.append((s * f * _fit(c, it, spec) * _qualifier_fit(c, ql) * (0.35 + 0.65 * cov), i))
     out.sort(key=lambda x: (-x[0], view.chunks[x[1]].url, x[1]))
     out = out[:limit]
@@ -378,6 +399,28 @@ def rank(view: View, question: str, limit: int = 60):
 
 MONTHS_DAYS = set("""january february march april may june july august september october november december
 monday tuesday wednesday thursday friday saturday sunday today""".split())
+
+
+def site_brand(view: View) -> str:
+    """The organisation's own name, read off the most common host: www.dupaco.com -> 'dupaco'."""
+    cached = getattr(view, "_brand", None)
+    if cached is not None:
+        return cached
+    hosts: dict = {}
+    for url in view.pages:
+        h = re.sub(r"^https?://", "", url).split("/")[0].removeprefix("www.")
+        hosts[h] = hosts.get(h, 0) + 1
+    top = max(hosts, key=hosts.get) if hosts else ""
+    view._brand = top.split(".")[0] if top else ""
+    return view._brand
+
+
+def _cooccur(text: str, brand: str, names: list[str]) -> bool:
+    for snt in re.split(r"(?<=[.!?])\s+", text):
+        sl = snt.lower()
+        if brand in sl and any(n in set(tokens(snt)) for n in names):
+            return True
+    return False
 
 
 def names_in(question: str) -> list[str]:
