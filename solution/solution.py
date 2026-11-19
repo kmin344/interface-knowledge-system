@@ -129,10 +129,10 @@ class TemporalKnowledge:
                     picked.append(i)
                     break
 
-        if it.eligibility:
+        if it.eligibility and (re.match(r"^/about/join\b", re.sub(r"^https?://[^/]+", "", best.url.lower()))
+                               or re.search(r"eligib|who can|join if|membership requirement", best.heading, re.I)):
             # "who can join": the site states *where* in one short line that shares no words with
             # the question ("You can find us in Iowa, Illinois and Wisconsin")
-            rec = view.chunk_page[bi]
             for j, c in enumerate(view.chunks):
                 if c.url == best.url and c.kind == "para" and j not in picked and REGION_RE.search(c.text):
                     picked.append(j)

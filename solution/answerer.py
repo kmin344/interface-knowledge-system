@@ -93,9 +93,10 @@ def intent_of(q: str) -> Intent:
         homes=homes,
         amount=float(am.group(1).replace(",", "")) if (am := AMT_RE.search(q)) else None,
         times=bool(re.search(r"\bhow many times\b", ql)),
-        award=bool(re.search(r"\b(recogni\w*|awards?|honou?r\w*|ranked|rankings?|accolades?)\b", ql)),
-        eligibility=bool(re.search(r"\b(eligib\w*|who can (join|become)|qualif\w* (to|for) (join|membership)|"
-                                   r"can i (join|become a member))\b", ql)),
+        award=bool(re.search(r"\b(recogni\w*|awards?|honou?red|honou?rs|ranked|rankings?|accolades?)\b", ql)),
+        eligibility=bool(re.search(r"\b(who can (join|become)|qualif\w* (to|for) (join|membership)|"
+                                   r"can i (join|become a member))\b|"
+                                   r"\beligib\w*\b.{0,40}\b(join|member\w*)\b|\b(join|member\w*)\b.{0,40}\beligib\w*\b", ql)),
         when=bool(re.search(r"\b(when|what date|still open|reopen)\b", ql)
                   or (re.search(r"\b(closed?|closing)\b", ql) and not re.search(r"\bwhere\b", ql))),
     )
@@ -114,6 +115,7 @@ def _year_fit(text: str, year: int) -> float:
 
 
 ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+ORDINAL_TIME_RE = re.compile(r"\b(" + "|".join(ORDINALS) + r") time\b", re.I)
 
 
 def _fit(c, it: Intent, qspec: list[str]) -> float:
@@ -147,14 +149,16 @@ def _fit(c, it: Intent, qspec: list[str]) -> float:
         f *= 0.8   # a balance question wants the one tier, not the whole table
     if it.award and c.kind == "para":
         # an award question wants the sentence that says what the subject received
-        m = re.search(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) time\b", t, re.I)
-        if m:
+        m = re.search(ORDINAL_TIME_RE, t)
+        if m and it.times:
+            pass   # the "how many times" boost below already weighs the ordinal
+        elif m:
             # recognitions accumulate: the highest count is the current one
             f *= 1.3 + 0.3 * ORDINALS.index(m.group(1).lower())
         elif re.search(r"\b(named|ranked|awarded|honored|selected as|recognized as)\b", t, re.I):
             f *= 1.15
     if it.times:
-        m = re.search(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) time\b", t, re.I)
+        m = re.search(ORDINAL_TIME_RE, t)
         f *= (1.5 + 0.4 * ORDINALS.index(m.group(1).lower())) if m else 0.6
     if c.kind == "table":
         f *= 1.3 if it.listing else 0.8
