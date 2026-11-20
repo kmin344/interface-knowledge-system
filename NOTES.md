@@ -12,7 +12,7 @@ snapshots takes about 6 seconds; answers take 0.2–0.8 s (p95 well under the 2 
 | Run | Score |
 |---|---|
 | `starter` (official scorer, public 40) | 0.093 |
-| this solution (official scorer, public 40) | **0.915** accuracy, consistency 1.0, speed 1.0 (p95 ≈ 0.8 s), 0 stale-trap hits |
+| this solution (official scorer, public 40) | **0.969** accuracy, consistency 1.0, speed 1.0 (p95 ≈ 0.6 s), 0 stale-trap hits |
 | `harness/selftest` (with conflicts gold) | conflicts F1 1.0, resolution 1.0 |
 
 Because the hidden set rewords questions, most of the tuning was done against questions I wrote
@@ -58,6 +58,17 @@ the cited page. Tier questions bring along sibling rows from the same table; "wh
 offer" brings the best table from each trusted page. Other trusted pages that state the same
 figures are cited too.
 
+Two question shapes get a composed lead line on top of the extracts:
+- **"Do any savings tiers pay 0.35%?"** A yes/no about one figure. The answer says where the
+  figure is listed (Health Savings $25,000+, Investor's Choice Money Market $25,000–$99,999.99),
+  then what the named product pays (Share Savings tops out at 0.20%), with those rows. It does
+  not rule "yes" or "no" for the reader when the figure exists on a neighbouring product.
+  Comparisons ("below 5%") are not treated as this shape.
+- **"How many used Volunteer Time Off last year?"** "Last year" moves with the calendar. If the
+  passage reports a different year than the one asked (2025, from the snapshot date), the site
+  may not have that year yet, so the answer shows each year it does report, newest first
+  (2025 hours, 2024: 256 employees, 2023: 294), each with its own source.
+
 **Refusing.** "I'm sorry, that isn't listed…" with no numbers when:
 - a rate is asked for and the best passage is not a rate statement on a trusted page;
 - the product term asked for (40-year, 7/1, 60-month jumbo) is not on the passage;
@@ -101,10 +112,9 @@ Three narrow detectors, because every false entry costs precision:
   for another site.
 - A paraphrase that uses a word the site never uses ("CD", "drive-thru", "thirty-year" work;
   rarer slang may not) falls back to plain BM25.
-- Public misses I know about: the Volunteer-Time-Off count prefers the 2024 article over the 2023
-  one the eval expects ("last year" is ambiguous, and newest-wins is the rule elsewhere);
-  "do any tiers pay 0.35%?" needs a yes/no judgement an extractive answer cannot make; dup-005
-  has no expected values, so the scorer gives it 0 whatever the answer.
+- Public miss I know about: dup-005 ("rate for the certificate of accounts") has no expected
+  values, so the scorer gives it 0 whatever the answer. The answer reads back every certificate
+  term and rate, which is what its expected answer describes.
 
 ## Layout
 

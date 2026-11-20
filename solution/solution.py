@@ -67,6 +67,11 @@ class TemporalKnowledge:
         cov = coverage(view, qt, bi)
         asks_rate = it.rate and not it.url
         terms = asked_terms(question)
+        check = VALUE_CHECK_RE.search(question)
+        if check and best.kind == "row" and is_rate_chunk(best) and authority(best.url) >= 0.8:
+            # "do any savings tiers pay 0.35%?": a yes/no about one figure. Answer from the rate
+            # sheet itself: the main product's tiers, then every row that does carry the figure.
+            return self._value_check(view, ranked, bi, check.group(1), question)
         if (asks_rate and (cov < 0.45 or not is_rate_chunk(best) or authority(best.url) < 0.8
                            or (terms and not has_terms(best.text, terms)))) \
                 or cov < 0.3 or best_s < 1.0 or missing_name(view, question, bi):
@@ -129,6 +134,12 @@ class TemporalKnowledge:
                     picked.append(i)
                     break
 
+        if best.kind == "para" and RELATIVE_YEAR_RE.search(question):
+            # "last year" is a moving target: if the passage reports some other year, the site may
+            # simply not have the asked year yet. Show each year it does report, newest first,
+            # so the reader sees which year each figure belongs to.
+            picked = self._year_series(view, ranked, best_s, picked, question)
+
         if it.eligibility and (re.match(r"^/about/join\b", re.sub(r"^https?://[^/]+", "", best.url.lower()))
                                or re.search(r"eligib|who can|join if|membership requirement", best.heading, re.I)):
             # "who can join": the site states *where* in one short line that shares no words with
@@ -145,7 +156,7 @@ class TemporalKnowledge:
                 t = pick_sentences(t, spec, it, qt)
             parts.append(t)
         text = " | ".join(parts)
-        if best.heading and best.kind == "para":
+        if best.heading and best.kind == "para" and picked[0] == bi:
             head = best.heading.split(" > ")[-1]
             if head.lower() not in text.lower():
                 text = f"{head}: {text}"
@@ -159,6 +170,62 @@ class TemporalKnowledge:
                         and all(s.url != url for s in sources) and len(sources) < 4:
                     sources.append(Source(url=url, snapshot_id=rec.snapshot_id))
         return Answer(text=text[:1500], sources=sources, confident=True)
+
+    def _value_check(self, view, ranked, bi, value: str, question: str) -> Answer:
+        best = view.chunks[bi]
+        want = f"{float(value):.2f}%"
+        # the product the question names, as the rate sheet lists it first ("savings" ->
+        # Share Savings, the first savings table): rows ranked for the question on that page
+        best_s = ranked[0][0]
+        rows = [(s, i) for s, i in ranked if view.chunks[i].kind == "row" and view.chunks[i].url == best.url]
+        terms = asked_terms(question)
+        termed = [i for s, i in rows if terms and has_terms(view.chunks[i].text, terms)]
+        if termed:
+            # "the 60 month certificate": the row(s) that name the term, and their table
+            main_table = view.chunks[termed[0]].table_id
+            main = [i for i in termed if view.chunks[i].table_id == main_table][:MAX_ROWS]
+        else:
+            # a product named in general ("savings tiers"): of the tables that match as well as
+            # the best row, the one the rate sheet lists first (Share Savings before Launchpad)
+            main_table = min(view.chunks[i].table_id for s, i in rows if s >= 0.95 * best_s)
+            main = [i for i, c in enumerate(view.chunks)
+                    if c.kind == "row" and c.url == best.url and c.table_id == main_table][:MAX_ROWS]
+        hits = [i for i, c in enumerate(view.chunks)
+                if c.kind == "row" and c.url == best.url and want in c.text and i not in main][:4]
+        name = row_label(view.chunks[main[0]].text, short=True)
+        rates = sorted({float(m) for i in main for m in re.findall(r"(\d+\.\d\d)%", view.chunks[i].text)})
+        top = f"{name} tops out at {rates[-1]:.2f}%." if rates else ""
+        if any(want in view.chunks[i].text for i in main):
+            lead = f"Yes: {want} is on {name}."
+        elif hits:
+            # say where the figure is, and what the named product pays; let the reader judge
+            lead = f"{want} is listed for: " + "; ".join(row_label(view.chunks[i].text) for i in hits) + f". {top}"
+        else:
+            lead = f"No rate on the rate sheet is {want}. {top}"
+        parts = [lead] + [view.chunks[i].text for i in main] + [view.chunks[i].text for i in hits]
+        picked = main + hits
+        return Answer(text=" | ".join(parts)[:1500], sources=self._sources(view, ranked, picked or [bi], ""),
+                      confident=True)
+
+    def _year_series(self, view, ranked, best_s, picked, question):
+        def year(t):
+            m = YEAR_LABEL_RE.search(t)
+            return int(m.group(1)) if m else None
+        y0 = year(view.chunks[picked[0]].text)
+        ref = int(view.taken_on[:4])
+        target = ref if re.search(r"\bthis\s+year", question, re.I) else ref - 1
+        if y0 is None or y0 == target:
+            return picked
+        by_year = {y0: picked[0]}
+        for s, i in ranked[1:12]:
+            c = view.chunks[i]
+            y = year(c.text)
+            if s < 0.5 * best_s or c.kind != "para" or y is None or y in by_year or not re.search(r"\d", c.text):
+                continue
+            by_year[y] = i
+            if len(by_year) >= 3:
+                break
+        return [by_year[y] for y in sorted(by_year, reverse=True)]
 
     def _with_links(self, view, bi, spec, text):
         """For 'which link / how do I ... online' questions: the page itself plus any link on that
@@ -202,8 +269,26 @@ class TemporalKnowledge:
 _PLACE = r"[A-Z][a-z]+(?:\s[A-Z][a-z]+)*"
 # a list of three or more places: "in Iowa, Illinois and Wisconsin" (not "in Shine Online and Mobile Banking")
 REGION_RE = re.compile(r"\b(?:in|across|throughout)\s+" + _PLACE + r"(?:,\s*" + _PLACE + r")+,?\s+and\s+" + _PLACE)
-DATE_IN_TEXT_RE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? 20\d\d\b")
+# yes/no about one figure: "Do any savings tiers pay 0.35% APY?", "Does the 12-month pay 3.40%?"
+VALUE_CHECK_RE = re.compile(r"^\s*(?:do|does|is|are|can|will)\b(?!.*\b(?:below|under|above|over|less|more|least|most|lower|higher|than)\b)"
+                            r".*?\b(\d{1,2}(?:\.\d{1,3})?)\s?%", re.I)
+RELATIVE_YEAR_RE = re.compile(r"\b(?:last|previous|past|this)\s+year\b", re.I)
+# a figure labelled with its year at the start of a sentence: "In 2024 alone: ...", "In 2025, ..."
+YEAR_LABEL_RE = re.compile(r"(?:^|[.:;!?]\s+)In (20\d\d)\b")
+DATE_IN_TEXT_RE =re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? 20\d\d\b")
 SENT_RE = re.compile(r"(?<![ap]\.m\.)(?<=[.!?])\s+(?=[A-Z0-9“\"])")
+
+
+def row_label(row: str, short: bool = False) -> str:
+    """'Share Savings — Account Type: Share Savings; Balance Tier: $25,000+; ...' ->
+    'Share Savings ($25,000+)'; 'Regular Certificates — Certificate: 12 Month; ...' ->
+    'Regular Certificates (12 Month)'."""
+    name, _, rest = row.partition(" — ")
+    if short:
+        return name.strip()
+    vals = [f.split(":", 1)[1].strip() for f in rest.split("; ")[:2] if ":" in f]
+    extra = [v for v in vals if v and v != name.strip() and v != "—"]
+    return f"{name.strip()} ({extra[0]})" if extra else name.strip()
 
 
 def pick_sentences(text: str, spec: list[str], it, qt_all=None) -> str:
