@@ -285,7 +285,7 @@ EXPIRED_RE = re.compile(r"\b(?:offer|promotion|promo|special|rate)?\s*(?:ended|e
 MONTH_NUM = {m: i + 1 for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())}
 
 
-def _iso(d: str) -> str:
+def iso_date(d: str) -> str:
     d = d.strip()
     if re.fullmatch(r"\d{4}-\d\d-\d\d", d):
         return d
@@ -301,7 +301,7 @@ def _iso(d: str) -> str:
 def expired(text: str, today: str) -> bool:
     """'Summer special ... (offer ended 2025-09-30)': an offer whose own end date has passed."""
     for m in EXPIRED_RE.finditer(text):
-        d = _iso(m.group(1))
+        d = iso_date(m.group(1))
         if d and d < today[:10]:
             return True
     return False
