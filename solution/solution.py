@@ -17,7 +17,7 @@ try:  # the harness puts its own folder on sys.path; use its types when availabl
 except Exception:  # standalone use: identical local copies
     from kb_types import Answer, Conflict, Snapshot, Source  # type: ignore
 
-from answerer import (ADDR_RE, PHONE_RE, TIME_RE, PCT_RE, REFUSAL_TEXT, coverage, is_rate_chunk, rank, specific_terms,  # noqa: E402
+from answerer import (_iso, ADDR_RE, PHONE_RE, TIME_RE, PCT_RE, REFUSAL_TEXT, coverage, is_rate_chunk, rank, specific_terms,  # noqa: E402
                       missing_name, time_signature, asked_terms, has_terms, strip_dates)
 from conflicts import find_conflicts  # noqa: E402
 from store import History, authority  # noqa: E402
@@ -134,6 +134,15 @@ class TemporalKnowledge:
                     picked.append(i)
                     break
 
+        sup = SUPERLATIVE_RE.search(question)
+        if sup and best.kind == "row":
+            # "the highest Share Savings APY": every tier of that table, extreme first
+            rows = [j for j, c in enumerate(view.chunks)
+                    if c.kind == "row" and c.url == best.url and c.table_id == best.table_id]
+            hi = sup.group(1).lower() in ("highest", "maximum", "max", "top")
+            rows.sort(key=lambda j: row_rate(view.chunks[j].text), reverse=hi)
+            picked = rows[:MAX_ROWS] if rows else picked
+
         if best.kind == "para" and RELATIVE_YEAR_RE.search(question):
             # "last year" is a moving target: if the passage reports some other year, the site may
             # simply not have the asked year yet. Show each year it does report, newest first,
@@ -151,15 +160,20 @@ class TemporalKnowledge:
         parts = []
         for i in picked:
             c = view.chunks[i]
-            t = c.text
-            if c.kind == "para" and len(t) > 350:
+            t = BOILERPLATE_RE.sub("", c.text).strip() or c.text
+            if c.kind == "para" and (len(t) > 350 or it.hours or it.phone or it.address):
                 t = pick_sentences(t, spec, it, qt)
             parts.append(t)
         text = " | ".join(parts)
         if best.heading and best.kind == "para" and picked[0] == bi:
             head = best.heading.split(" > ")[-1]
-            if head.lower() not in text.lower():
+            # the page title helps only when it is about what was asked
+            if head.lower() not in text.lower() and set(tokens(head)) & set(spec):
                 text = f"{head}: {text}"
+        if STILL_RE.search(question):
+            lead = self._past_date_lead(view, text)
+            if lead:
+                text = f"{lead} {text}"
         if it.url:
             text = self._with_links(view, bi, spec, text)
         sources = self._sources(view, ranked, picked, text)
@@ -206,6 +220,16 @@ class TemporalKnowledge:
         picked = main + hits
         return Answer(text=" | ".join(parts)[:1500], sources=self._sources(view, ranked, picked or [bi], ""),
                       confident=True)
+
+    @staticmethod
+    def _past_date_lead(view, text: str):
+        """'Is the Hy-Vee branch still open?' and the passage says it 'will close March 31,
+        2026', a date already past on the snapshot date: say so in one line, with both dates."""
+        for m in CLOSING_RE.finditer(text):
+            d = _iso(m.group(1))
+            if d and d < view.taken_on[:10]:
+                return f'No: the site says "{m.group(0)}", which is before {view.taken_on[:10]}.'
+        return None
 
     def _year_series(self, view, ranked, best_s, picked, question):
         def year(t):
@@ -272,11 +296,25 @@ REGION_RE = re.compile(r"\b(?:in|across|throughout)\s+" + _PLACE + r"(?:,\s*" + 
 # yes/no about one figure: "Do any savings tiers pay 0.35% APY?", "Does the 12-month pay 3.40%?"
 VALUE_CHECK_RE = re.compile(r"^\s*(?:do|does|is|are|can|will)\b(?!.*\b(?:below|under|above|over|less|more|least|most|lower|higher|than)\b)"
                             r".*?\b(\d{1,2}(?:\.\d{1,3})?)\s?%", re.I)
+SUPERLATIVE_RE = re.compile(r"\b(highest|lowest|maximum|minimum|max|min|top)\b", re.I)
+# "still open / still available / still offered"
+STILL_RE = re.compile(r"\bstill\s+(?:open|available|offered|running|operating|there|around|active)\b", re.I)
+_MONTHS = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? 20\d\d"
+CLOSING_RE = re.compile(r"\b(?:will close|closes|closed|closing|ends|ended|will end|expires|expired"
+                        r"|last day of service will be|last day will be)\s+(?:on\s+)?(?:[A-Z][a-z]+day,\s+)?(" + _MONTHS + r")")
+# press-release footer: "ABOUT DUPACO COMMUNITY CREDIT UNION: ..." to the end of the passage
+BOILERPLATE_RE = re.compile(r"\s*\bABOUT [A-Z][A-Z0-9 &'.,-]{3,}:.*$", re.S)
 RELATIVE_YEAR_RE = re.compile(r"\b(?:last|previous|past|this)\s+year\b", re.I)
 # a figure labelled with its year at the start of a sentence: "In 2024 alone: ...", "In 2025, ..."
 YEAR_LABEL_RE = re.compile(r"(?:^|[.:;!?]\s+)In (20\d\d)\b")
 DATE_IN_TEXT_RE =re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? 20\d\d\b")
 SENT_RE = re.compile(r"(?<![ap]\.m\.)(?<=[.!?])\s+(?=[A-Z0-9“\"])")
+
+
+def row_rate(row: str) -> float:
+    """The row's yield or rate (the largest % it lists: APY >= dividend rate)."""
+    vals = [float(v) for v in re.findall(r"(\d+(?:\.\d+)?)%", row)]
+    return max(vals) if vals else -1.0
 
 
 def row_label(row: str, short: bool = False) -> str:
@@ -294,6 +332,12 @@ def row_label(row: str, short: bool = False) -> str:
 def pick_sentences(text: str, spec: list[str], it, qt_all=None) -> str:
     """Keep the one or two sentences of a long paragraph that carry the answer."""
     sents = SENT_RE.split(text)
+    # an hours / phone / address question: keep only the sentences that carry one, if any do
+    for on, rx in ((it.hours, TIME_RE), (it.phone, PHONE_RE), (it.address, ADDR_RE)):
+        if on and len(sents) > 1:
+            hits = [snt for snt in sents if rx.search(snt)]
+            if hits:
+                return " ".join(hits[:3])
     if len(sents) <= 2:
         return text
     want = set(spec)

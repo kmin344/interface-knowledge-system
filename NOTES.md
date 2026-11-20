@@ -58,12 +58,22 @@ the cited page. Tier questions bring along sibling rows from the same table; "wh
 offer" brings the best table from each trusted page. Other trusted pages that state the same
 figures are cited too.
 
-Two question shapes get a composed lead line on top of the extracts:
+Extracts are trimmed by whole sentences, never inside one: the press-release footer
+("ABOUT DUPACO COMMUNITY CREDIT UNION: ...") is dropped, an hours, phone or address question keeps
+only the sentences that carry a time, number or address, and a page title is prefixed only when it
+shares a word with the question. "Highest" and "lowest" questions list the table's tiers sorted by
+rate, so the answer comes first.
+
+Three question shapes get a composed lead line on top of the extracts:
 - **"Do any savings tiers pay 0.35%?"** A yes/no about one figure. The answer says where the
   figure is listed (Health Savings $25,000+, Investor's Choice Money Market $25,000–$99,999.99),
   then what the named product pays (Share Savings tops out at 0.20%), with those rows. It does
   not rule "yes" or "no" for the reader when the figure exists on a neighbouring product.
   Comparisons ("below 5%") are not treated as this shape.
+- **"Is the Hy-Vee branch still open?"** If the passage dates a closing or end ("will close
+  March 31, 2026", "last day of service will be Tuesday, Oct. 1, 2024") before the snapshot date,
+  the answer opens with "No: the site says "will close March 31, 2026", which is before
+  2026-09-28." The date phrase is quoted from the page.
 - **"How many used Volunteer Time Off last year?"** "Last year" moves with the calendar. If the
   passage reports a different year than the one asked (2025, from the snapshot date), the site
   may not have that year yet, so the answer shows each year it does report, newest first
